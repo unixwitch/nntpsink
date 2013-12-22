@@ -266,8 +266,14 @@ socklen_t		 addrlen;
 
 	while ((fd = accept(lsn->ln_fd, (struct sockaddr *) &addr, &addrlen)) >= 0) {
 	client_t	*client = xcalloc(1, sizeof(*client));
+	int		 one = 1;
 
 		client->cl_fd = fd;
+		if (setsockopt(client->cl_fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) == -1) {
+			close(fd);
+			free(client);
+			return;
+		}
 
 		client->cl_rdbuf = cq_new();
 		client->cl_wrbuf = cq_new();
