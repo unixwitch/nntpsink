@@ -115,7 +115,7 @@ int	 c, i;
 char	*progname = av[0];
 struct addrinfo	*res, *r, hints;
 
-	while ((c = getopt(ac, av, "VDSIh:p:")) != -1) {
+	while ((c = getopt(ac, av, "VDSIhl:p:")) != -1) {
 		switch (c) {
 		case 'V':
 			printf("nntpgen %s\n", PACKAGE_VERSION);
