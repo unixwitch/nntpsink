@@ -1,0 +1,16 @@
+*.o
+y.tab.c
+y.tab.h
+config.status
+config.log
+nts
+lex.yy.c
+Makefile
+CVS
+*.swp
+setup.h
+vers.c
+build
+dbversion
+doconf
+autom4te.cache
