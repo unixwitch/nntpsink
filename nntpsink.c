@@ -286,6 +286,7 @@ socklen_t		 addrlen;
 
 		ev_io_start(loop, &client->cl_readable);
 		client_printf(client, "200 nntpsink ready.\r\n");
+		client_flush(client);
 	}
 
 	if (!ignore_errno(errno)) {
@@ -354,7 +355,8 @@ client_send(cl, s)
 	char const	*s;
 {
 	cq_append(cl->cl_wrbuf, s, strlen(s));
-	client_flush(cl);
+	if (cq_len(cl->cl_wrbuf) > 1024)
+		client_flush(cl);
 }
 
 void
@@ -364,7 +366,8 @@ char	line[1024];
 int	n;
 	n = vsnprintf(line, sizeof(line), fmt, ap);
 	cq_append(cl->cl_wrbuf, line, n);
-	client_flush(cl);
+	if (cq_len(cl->cl_wrbuf) > 1024)
+		client_flush(cl);
 }
 
 void
@@ -391,6 +394,8 @@ client_t	*cl = w->data;
 				return;
 			printf("[%d] read error: %s\n",
 				cl->cl_fd, strerror(errno));
+			client_close(cl);
+			return;
 		}
 
 		while (ln = cq_read_line(cl->cl_rdbuf)) {
@@ -483,6 +488,7 @@ client_t	*cl = w->data;
 			if (cl->cl_flags & CL_DEAD)
 				return;
 		}
+		client_flush(cl);
 	}
 }
 
