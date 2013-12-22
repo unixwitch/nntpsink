@@ -40,7 +40,8 @@ int	 debug;
 
 typedef enum client_state {
 	CL_NORMAL,
-	CL_READ_ARTICLE
+	CL_TAKETHIS,
+	CL_IHAVE
 } client_state_t;
 
 #define	CL_DEAD		0x1
@@ -369,12 +370,19 @@ client_t	*cl = w->data;
 			 * 438 <msg-id> -- CHECK, never send the article
 			 * 239 <msg-id> -- TAKETHIS, accepted
 			 * 439 <msg-id> -- TAKETHIS, rejected
+			 * 335 <msg-id> -- IHAVE, send the article
+			 * 435 <msg-id> -- IHAVE, never send the article
+			 * 436 <msg-id> -- IHAVE, defer the article
 			 */
 
 			if (cl->cl_state == CL_NORMAL) {
 				cmd = ln;
 				if ((data = index(cmd, ' ')) != NULL) {
 					*data++ = 0;
+					while (isspace(*data))
+						data++;
+					if (!*data)
+						data = NULL;
 				}
 
 				if (strcasecmp(cmd, "CAPABILITIES") == 0) {
@@ -388,16 +396,33 @@ client_t	*cl = w->data;
 				} else if (strcasecmp(cmd, "QUIT") == 0) {
 					client_close(cl);
 				} else if (strcasecmp(cmd, "CHECK") == 0) {
-					client_printf(cl, "238 %s\r\n", data);
+					if (!data)
+						client_printf(cl, "501 Missing message-id.\r\n");
+					else
+						client_printf(cl, "238 %s\r\n", data);
 				} else if (strcasecmp(cmd, "TAKETHIS") == 0) {
-					cl->cl_msgid = strdup(data);
-					cl->cl_state = CL_READ_ARTICLE;
+					if (!data)
+						client_printf(cl, "501 Missing message-id.\r\n");
+					else {
+						cl->cl_msgid = strdup(data);
+						cl->cl_state = CL_TAKETHIS;
+					}
+				} else if (strcasecmp(cmd, "IHAVE") == 0) {
+					if (!data)
+						client_printf(cl, "501 Missing message-id.\r\n");
+					else {
+						client_printf(cl, "335 %s\r\n", data);
+						cl->cl_msgid = strdup(data);
+						cl->cl_state = CL_IHAVE;
+					}
 				} else {
 					client_printf(cl, "500 Unknown command.\r\n");
 				}
-			} else if (cl->cl_state == CL_READ_ARTICLE) {
+			} else if (cl->cl_state == CL_TAKETHIS || cl->cl_state == CL_IHAVE) {
 				if (strcmp(ln, ".") == 0) {
-					client_printf(cl, "239 %s\r\n", cl->cl_msgid);
+					client_printf(cl, "%d %s\r\n",
+						cl->cl_state == CL_IHAVE ? 235 : 239,
+						cl->cl_msgid);
 					free(cl->cl_msgid);
 					cl->cl_msgid = NULL;
 					cl->cl_state = CL_NORMAL;
