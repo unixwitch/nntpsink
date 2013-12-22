@@ -36,6 +36,9 @@ char	*listen_host;
 char	*port;
 int	 debug;
 
+int	 do_ihave = 1;
+int	 do_streaming = 1;
+
 #define		ignore_errno(e) ((e) == EAGAIN || (e) == EINPROGRESS || (e) == EWOULDBLOCK)
 
 typedef enum client_state {
@@ -91,11 +94,13 @@ usage(p)
 	char const	*p;
 {
 	fprintf(stderr,
-"usage: %s [-VDh] [-l <host>] [-p <port>]\n"
+"usage: %s [-VDhIS] [-l <host>] [-p <port>]\n"
 "\n"
 "    -V                   print version and exit\n"
 "    -h                   print this text\n"
 "    -D                   show data sent/received\n"
+"    -I                   support IHAVE only (not streaming)\n"
+"    -S                   support streaming only (not IHAVE)\n"
 "    -l <host>            address to listen on (default: localhost)\n"
 "    -p <port>            port to listen on (default: 119)\n"
 , p);
@@ -109,7 +114,7 @@ int	 c, i;
 char	*progname = av[0];
 struct addrinfo	*res, *r, hints;
 
-	while ((c = getopt(ac, av, "VDh:p:")) != -1) {
+	while ((c = getopt(ac, av, "VDSIh:p:")) != -1) {
 		switch (c) {
 		case 'V':
 			printf("nntpgen %s\n", PACKAGE_VERSION);
@@ -117,6 +122,15 @@ struct addrinfo	*res, *r, hints;
 
 		case 'D':
 			debug++;
+			break;
+
+		case 'I':
+			do_streaming = 0;
+			break;
+
+		case 'S':
+			do_ihave = 0;
+			break;
 
 		case 'l':
 			free(listen_host);
@@ -139,6 +153,11 @@ struct addrinfo	*res, *r, hints;
 	}
 	ac -= optind;
 	av += optind;
+
+	if (!do_ihave && !do_streaming) {
+		fprintf(stderr, "%s: -I and -S may not both be specified\n", progname);
+		return 1;
+	}
 
 	if (!listen_host)
 		listen_host = strdup("localhost");
@@ -387,28 +406,43 @@ client_t	*cl = w->data;
 
 				if (strcasecmp(cmd, "CAPABILITIES") == 0) {
 					client_printf(cl,
-	"101 Capability list:\r\n"
-	"VERSION 2\r\n"
-	"IMPLEMENTATION nntpsink %s\r\n"
-	"IHAVE\r\n"
-	"STREAMING\r\n"
-	".\r\n", PACKAGE_VERSION);
+						"101 Capability list:\r\n"
+						"VERSION 2\r\n"
+						"IMPLEMENTATION nntpsink %s\r\n", PACKAGE_VERSION);
+					if (do_ihave)
+						client_printf(cl, "IHAVE\r\n");
+					if (do_streaming)
+						client_printf(cl, "STREAMING\r\n");
+					client_printf(cl, ".\r\n");
 				} else if (strcasecmp(cmd, "QUIT") == 0) {
 					client_close(cl);
+				} else if (strcasecmp(cmd, "MODE") == 0) {
+					if (!data || strcasecmp(data, "STREAM"))
+						client_printf(cl, "501 Unknown MODE.\r\n");
+					else if (!do_streaming)
+						client_printf(cl, "501 Unknown MODE.\r\n");
+					else
+						client_printf(cl, "203 Streaming OK.\r\n");
 				} else if (strcasecmp(cmd, "CHECK") == 0) {
-					if (!data)
+					if (!do_streaming)
+						client_printf(cl, "500 Unknown command.\r\n");
+					else if (!data)
 						client_printf(cl, "501 Missing message-id.\r\n");
 					else
 						client_printf(cl, "238 %s\r\n", data);
 				} else if (strcasecmp(cmd, "TAKETHIS") == 0) {
-					if (!data)
+					if (!do_streaming)
+						client_printf(cl, "500 Unknown command.\r\n");
+					else if (!data)
 						client_printf(cl, "501 Missing message-id.\r\n");
 					else {
 						cl->cl_msgid = strdup(data);
 						cl->cl_state = CL_TAKETHIS;
 					}
 				} else if (strcasecmp(cmd, "IHAVE") == 0) {
-					if (!data)
+					if (!do_ihave)
+						client_printf(cl, "500 Unknown command.\r\n");
+					else if (!data)
 						client_printf(cl, "501 Missing message-id.\r\n");
 					else {
 						client_printf(cl, "335 %s\r\n", data);
