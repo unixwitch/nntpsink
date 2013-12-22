@@ -67,6 +67,7 @@ void	client_read(struct ev_loop *, ev_io *, int);
 void	client_write(struct ev_loop *, ev_io *, int);
 void	client_flush(client_t *);
 void	client_close(client_t *);
+void	client_send(client_t *, char const *);
 void	client_printf(client_t *, char const *, ...);
 void	client_vprintf(client_t *, char const *, va_list);
 
@@ -342,6 +343,15 @@ client_close(cl)
 }
 
 void
+client_send(cl, s)
+	client_t	*cl;
+	char const	*s;
+{
+	cq_append(cl->cl_wrbuf, s, strlen(s));
+	client_flush(cl);
+}
+
+void
 client_vprintf(client_t *cl, char const *fmt, va_list ap)
 {
 char	line[1024];
@@ -410,47 +420,47 @@ client_t	*cl = w->data;
 						"VERSION 2\r\n"
 						"IMPLEMENTATION nntpsink %s\r\n", PACKAGE_VERSION);
 					if (do_ihave)
-						client_printf(cl, "IHAVE\r\n");
+						client_send(cl, "IHAVE\r\n");
 					if (do_streaming)
-						client_printf(cl, "STREAMING\r\n");
-					client_printf(cl, ".\r\n");
+						client_send(cl, "STREAMING\r\n");
+					client_send(cl, ".\r\n");
 				} else if (strcasecmp(cmd, "QUIT") == 0) {
 					client_close(cl);
 				} else if (strcasecmp(cmd, "MODE") == 0) {
 					if (!data || strcasecmp(data, "STREAM"))
-						client_printf(cl, "501 Unknown MODE.\r\n");
+						client_send(cl, "501 Unknown MODE.\r\n");
 					else if (!do_streaming)
-						client_printf(cl, "501 Unknown MODE.\r\n");
+						client_send(cl, "501 Unknown MODE.\r\n");
 					else
-						client_printf(cl, "203 Streaming OK.\r\n");
+						client_send(cl, "203 Streaming OK.\r\n");
 				} else if (strcasecmp(cmd, "CHECK") == 0) {
 					if (!do_streaming)
-						client_printf(cl, "500 Unknown command.\r\n");
+						client_send(cl, "500 Unknown command.\r\n");
 					else if (!data)
-						client_printf(cl, "501 Missing message-id.\r\n");
+						client_send(cl, "501 Missing message-id.\r\n");
 					else
 						client_printf(cl, "238 %s\r\n", data);
 				} else if (strcasecmp(cmd, "TAKETHIS") == 0) {
 					if (!do_streaming)
-						client_printf(cl, "500 Unknown command.\r\n");
+						client_send(cl, "500 Unknown command.\r\n");
 					else if (!data)
-						client_printf(cl, "501 Missing message-id.\r\n");
+						client_send(cl, "501 Missing message-id.\r\n");
 					else {
 						cl->cl_msgid = strdup(data);
 						cl->cl_state = CL_TAKETHIS;
 					}
 				} else if (strcasecmp(cmd, "IHAVE") == 0) {
 					if (!do_ihave)
-						client_printf(cl, "500 Unknown command.\r\n");
+						client_send(cl, "500 Unknown command.\r\n");
 					else if (!data)
-						client_printf(cl, "501 Missing message-id.\r\n");
+						client_send(cl, "501 Missing message-id.\r\n");
 					else {
 						client_printf(cl, "335 %s\r\n", data);
 						cl->cl_msgid = strdup(data);
 						cl->cl_state = CL_IHAVE;
 					}
 				} else {
-					client_printf(cl, "500 Unknown command.\r\n");
+					client_send(cl, "500 Unknown command.\r\n");
 				}
 			} else if (cl->cl_state == CL_TAKETHIS || cl->cl_state == CL_IHAVE) {
 				if (strcmp(ln, ".") == 0) {
