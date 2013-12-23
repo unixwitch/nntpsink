@@ -53,6 +53,13 @@ typedef struct thread {
 	int			 th_naccept;
 	int			 th_acceptsize;
 	ev_async		 th_wakeup;
+
+	int			 th_nsend,
+				 th_naccepted,
+				 th_nrefuse,
+				 th_ndefer,
+				 th_nreject;
+	ev_timer		 th_stats;
 } thread_t;
 
 thread_t *threads;
@@ -63,6 +70,7 @@ void	 thread_wakeup(struct ev_loop *, ev_async *, int);
 void	*thread_run(void *);
 void	 thread_accept(thread_t *);
 void	 thread_deadlist(struct ev_loop *, ev_prepare *w, int revents);
+void	 do_thread_stats(struct ev_loop *, ev_timer *w, int);
 
 typedef enum client_state {
 	CL_NORMAL,
@@ -108,6 +116,7 @@ void	 usage(char const *);
 
 int	nsend, naccept, ndefer, nreject, nrefuse;
 void	do_stats(struct ev_loop *, ev_timer *w, int);
+pthread_mutex_t	stats_mtx;
 
 void
 usage(p)
@@ -286,6 +295,9 @@ struct addrinfo	*res, *r, hints;
 
 		ev_prepare_init(&th->th_deadlist_ev, thread_deadlist);
 		th->th_deadlist_ev.data = th;
+ 
+		ev_timer_init(&th->th_stats, do_thread_stats, .1, .1); 
+		th->th_stats.data = th;
 
 		pthread_mutex_init(&th->th_mtx, NULL);
 		pthread_create(&th->th_id, NULL, thread_run, th);
@@ -304,6 +316,7 @@ thread_run(p)
 thread_t	*th = p;
 	ev_async_start(th->th_loop, &th->th_wakeup);
 	ev_prepare_start(th->th_loop, &th->th_deadlist_ev);
+	ev_timer_start(th->th_loop, &th->th_stats);
 	ev_run(th->th_loop, 0);
 	return NULL;
 }
@@ -490,6 +503,8 @@ client_read(loop, w, revents)
 	ev_io		*w;
 {
 client_t	*cl = w->data;
+thread_t	*th = cl->cl_thread;
+
 	for (;;) {
 	char	*ln;
 	ssize_t	 n;
@@ -559,8 +574,10 @@ client_t	*cl = w->data;
 						client_send(cl, "500 Unknown command.\r\n");
 					else if (!data)
 						client_send(cl, "501 Missing message-id.\r\n");
-					else
+					else {
+						th->th_nsend++;
 						client_printf(cl, "238 %s\r\n", data);
+					}
 				} else if (strcasecmp(cmd, "TAKETHIS") == 0) {
 					if (!do_streaming)
 						client_send(cl, "500 Unknown command.\r\n");
@@ -579,6 +596,7 @@ client_t	*cl = w->data;
 						client_printf(cl, "335 %s\r\n", data);
 						cl->cl_msgid = strdup(data);
 						cl->cl_state = CL_IHAVE;
+						th->th_nsend++;
 					}
 				} else {
 					client_send(cl, "500 Unknown command.\r\n");
@@ -591,6 +609,7 @@ client_t	*cl = w->data;
 					free(cl->cl_msgid);
 					cl->cl_msgid = NULL;
 					cl->cl_state = CL_NORMAL;
+					th->th_naccepted++;
 				}
 			}
 
@@ -637,6 +656,7 @@ struct rusage	rus;
 uint64_t	ct;
 time_t		upt = time(NULL) - start_time;
 
+	pthread_mutex_lock(&stats_mtx);
 	getrusage(RUSAGE_SELF, &rus);
 	ct = (rus.ru_utime.tv_sec * 1000) + (rus.ru_utime.tv_usec / 1000)
 	   + (rus.ru_stime.tv_sec * 1000) + (rus.ru_stime.tv_usec / 1000);
@@ -644,6 +664,7 @@ time_t		upt = time(NULL) - start_time;
 	printf("send it: %d/s, refused: %d/s, rejected: %d/s, deferred: %d/s, accepted: %d/s, cpu %.2f%%\n",
 		nsend, nrefuse, nreject, ndefer, naccept, (((double)ct / 1000) / upt) * 100);
 	nsend = nrefuse = nreject = ndefer = naccept = 0;
+	pthread_mutex_unlock(&stats_mtx);
 }
 
 void
@@ -661,4 +682,23 @@ thread_t	*th = w->data;
 		cl = next;
 	}
 	th->th_deadlist = NULL;
+}
+
+void
+do_thread_stats(loop, w, revents)
+	struct ev_loop	*loop;
+	ev_timer	*w;
+{
+thread_t	*th = w->data;
+
+	pthread_mutex_lock(&stats_mtx);
+	nsend += th->th_nsend;
+	naccept += th->th_naccepted;
+	ndefer += th->th_ndefer;
+	nreject += th->th_nreject;
+	nrefuse += th->th_nrefuse;
+	pthread_mutex_unlock(&stats_mtx);
+
+	th->th_nsend = th->th_naccepted = th->th_ndefer = th->th_nreject
+		= th->th_nrefuse = 0;
 }
