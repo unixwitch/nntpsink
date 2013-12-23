@@ -183,6 +183,8 @@ struct addrinfo	*res, *r, hints;
 	ac -= optind;
 	av += optind;
 
+	signal(SIGPIPE, SIG_IGN);
+
 	if (!do_ihave && !do_streaming) {
 		fprintf(stderr, "%s: -I and -S may not both be specified\n", progname);
 		return 1;
@@ -384,10 +386,8 @@ socklen_t		 addrlen;
 			++next_thread;
 	}
 
-	if (!ignore_errno(errno)) {
+	if (!ignore_errno(errno))
 		fprintf(stderr, "accept: %s", strerror(errno));
-		exit(1);
-	}
 }
 
 void
@@ -443,6 +443,9 @@ client_close(cl)
 thread_t	*th = cl->cl_thread;
 struct ev_loop	*loop = th->th_loop;
 
+	if (cl->cl_flags & CL_DEAD)
+		return;
+
 	ev_io_stop(loop, &cl->cl_writable);
 	ev_io_stop(loop, &cl->cl_readable);
 	cl->cl_flags |= CL_DEAD;
@@ -496,6 +499,11 @@ client_t	*cl = w->data;
 				return;
 			printf("[%d] read error: %s\n",
 				cl->cl_fd, strerror(errno));
+			client_close(cl);
+			return;
+		}
+
+		if (n == 0) {
 			client_close(cl);
 			return;
 		}
