@@ -504,121 +504,119 @@ client_read(loop, w, revents)
 {
 client_t	*cl = w->data;
 thread_t	*th = cl->cl_thread;
+char		*ln;
+ssize_t		 n;
 
-	for (;;) {
-	char	*ln;
-	ssize_t	 n;
-
-		if ((n = cq_read(cl->cl_rdbuf, cl->cl_fd)) == -1) {
-			if (ignore_errno(errno))
-				return;
-			printf("[%d] read error: %s\n",
-				cl->cl_fd, strerror(errno));
-			client_close(cl);
+	if ((n = cq_read(cl->cl_rdbuf, cl->cl_fd)) == -1) {
+		if (ignore_errno(errno))
 			return;
-		}
+		printf("[%d] read error: %s\n",
+			cl->cl_fd, strerror(errno));
+		client_close(cl);
+		return;
+	}
 
-		if (n == 0) {
-			client_close(cl);
-			return;
-		}
+	if (n == 0) {
+		client_close(cl);
+		return;
+	}
 
-		while (ln = cq_read_line(cl->cl_rdbuf)) {
-		char	*cmd, *data;
+	while (ln = cq_read_line(cl->cl_rdbuf)) {
+	char	*cmd, *data;
 
-			if (debug)
-				printf("[%d] <- [%s]\n", cl->cl_fd, ln);
+		if (debug)
+			printf("[%d] <- [%s]\n", cl->cl_fd, ln);
 
-			/*
-			 * 238 <msg-id> -- CHECK, send the article
-			 * 431 <msg-id> -- CHECK, defer the article
-			 * 438 <msg-id> -- CHECK, never send the article
-			 * 239 <msg-id> -- TAKETHIS, accepted
-			 * 439 <msg-id> -- TAKETHIS, rejected
-			 * 335 <msg-id> -- IHAVE, send the article
-			 * 435 <msg-id> -- IHAVE, never send the article
-			 * 436 <msg-id> -- IHAVE, defer the article
-			 */
+		/*
+		 * 238 <msg-id> -- CHECK, send the article
+		 * 431 <msg-id> -- CHECK, defer the article
+		 * 438 <msg-id> -- CHECK, never send the article
+		 * 239 <msg-id> -- TAKETHIS, accepted
+		 * 439 <msg-id> -- TAKETHIS, rejected
+		 * 335 <msg-id> -- IHAVE, send the article
+		 * 435 <msg-id> -- IHAVE, never send the article
+		 * 436 <msg-id> -- IHAVE, defer the article
+		 */
 
-			if (cl->cl_state == CL_NORMAL) {
-				cmd = ln;
-				if ((data = index(cmd, ' ')) != NULL) {
-					*data++ = 0;
-					while (isspace(*data))
-						data++;
-					if (!*data)
-						data = NULL;
-				}
-
-				if (strcasecmp(cmd, "CAPABILITIES") == 0) {
-					client_printf(cl,
-						"101 Capability list:\r\n"
-						"VERSION 2\r\n"
-						"IMPLEMENTATION nntpsink %s\r\n", PACKAGE_VERSION);
-					if (do_ihave)
-						client_send(cl, "IHAVE\r\n");
-					if (do_streaming)
-						client_send(cl, "STREAMING\r\n");
-					client_send(cl, ".\r\n");
-				} else if (strcasecmp(cmd, "QUIT") == 0) {
-					client_close(cl);
-				} else if (strcasecmp(cmd, "MODE") == 0) {
-					if (!data || strcasecmp(data, "STREAM"))
-						client_send(cl, "501 Unknown MODE.\r\n");
-					else if (!do_streaming)
-						client_send(cl, "501 Unknown MODE.\r\n");
-					else
-						client_send(cl, "203 Streaming OK.\r\n");
-				} else if (strcasecmp(cmd, "CHECK") == 0) {
-					if (!do_streaming)
-						client_send(cl, "500 Unknown command.\r\n");
-					else if (!data)
-						client_send(cl, "501 Missing message-id.\r\n");
-					else {
-						th->th_nsend++;
-						client_printf(cl, "238 %s\r\n", data);
-					}
-				} else if (strcasecmp(cmd, "TAKETHIS") == 0) {
-					if (!do_streaming)
-						client_send(cl, "500 Unknown command.\r\n");
-					else if (!data)
-						client_send(cl, "501 Missing message-id.\r\n");
-					else {
-						cl->cl_msgid = strdup(data);
-						cl->cl_state = CL_TAKETHIS;
-					}
-				} else if (strcasecmp(cmd, "IHAVE") == 0) {
-					if (!do_ihave)
-						client_send(cl, "500 Unknown command.\r\n");
-					else if (!data)
-						client_send(cl, "501 Missing message-id.\r\n");
-					else {
-						client_printf(cl, "335 %s\r\n", data);
-						cl->cl_msgid = strdup(data);
-						cl->cl_state = CL_IHAVE;
-						th->th_nsend++;
-					}
-				} else {
-					client_send(cl, "500 Unknown command.\r\n");
-				}
-			} else if (cl->cl_state == CL_TAKETHIS || cl->cl_state == CL_IHAVE) {
-				if (strcmp(ln, ".") == 0) {
-					client_printf(cl, "%d %s\r\n",
-						cl->cl_state == CL_IHAVE ? 235 : 239,
-						cl->cl_msgid);
-					free(cl->cl_msgid);
-					cl->cl_msgid = NULL;
-					cl->cl_state = CL_NORMAL;
-					th->th_naccepted++;
-				}
+		if (cl->cl_state == CL_NORMAL) {
+			cmd = ln;
+			if ((data = index(cmd, ' ')) != NULL) {
+				*data++ = 0;
+				while (isspace(*data))
+					data++;
+				if (!*data)
+					data = NULL;
 			}
 
-			free(ln);
-			if (cl->cl_flags & CL_DEAD)
-				return;
+			if (strcasecmp(cmd, "CAPABILITIES") == 0) {
+				client_printf(cl,
+					"101 Capability list:\r\n"
+					"VERSION 2\r\n"
+					"IMPLEMENTATION nntpsink %s\r\n", PACKAGE_VERSION);
+				if (do_ihave)
+					client_send(cl, "IHAVE\r\n");
+				if (do_streaming)
+					client_send(cl, "STREAMING\r\n");
+				client_send(cl, ".\r\n");
+			} else if (strcasecmp(cmd, "QUIT") == 0) {
+				client_close(cl);
+			} else if (strcasecmp(cmd, "MODE") == 0) {
+				if (!data || strcasecmp(data, "STREAM"))
+					client_send(cl, "501 Unknown MODE.\r\n");
+				else if (!do_streaming)
+					client_send(cl, "501 Unknown MODE.\r\n");
+				else
+					client_send(cl, "203 Streaming OK.\r\n");
+			} else if (strcasecmp(cmd, "CHECK") == 0) {
+				if (!do_streaming)
+					client_send(cl, "500 Unknown command.\r\n");
+				else if (!data)
+					client_send(cl, "501 Missing message-id.\r\n");
+				else {
+					th->th_nsend++;
+					client_printf(cl, "238 %s\r\n", data);
+				}
+			} else if (strcasecmp(cmd, "TAKETHIS") == 0) {
+				if (!do_streaming)
+					client_send(cl, "500 Unknown command.\r\n");
+				else if (!data)
+					client_send(cl, "501 Missing message-id.\r\n");
+				else {
+					cl->cl_msgid = strdup(data);
+					cl->cl_state = CL_TAKETHIS;
+				}
+			} else if (strcasecmp(cmd, "IHAVE") == 0) {
+				if (!do_ihave)
+					client_send(cl, "500 Unknown command.\r\n");
+				else if (!data)
+					client_send(cl, "501 Missing message-id.\r\n");
+				else {
+					client_printf(cl, "335 %s\r\n", data);
+					cl->cl_msgid = strdup(data);
+					cl->cl_state = CL_IHAVE;
+					th->th_nsend++;
+				}
+			} else {
+				client_send(cl, "500 Unknown command.\r\n");
+			}
+		} else if (cl->cl_state == CL_TAKETHIS || cl->cl_state == CL_IHAVE) {
+			if (strcmp(ln, ".") == 0) {
+				client_printf(cl, "%d %s\r\n",
+					cl->cl_state == CL_IHAVE ? 235 : 239,
+					cl->cl_msgid);
+				free(cl->cl_msgid);
+				cl->cl_msgid = NULL;
+				cl->cl_state = CL_NORMAL;
+				th->th_naccepted++;
+			}
 		}
-		client_flush(cl);
+
+		free(ln);
+		if (cl->cl_flags & CL_DEAD)
+			return;
 	}
+
+	client_flush(cl);
 }
 
 void *
