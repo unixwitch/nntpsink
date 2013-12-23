@@ -26,6 +26,7 @@
 #include	<assert.h>
 #include	<time.h>
 #include	<stdarg.h>
+#include	<pthread.h>
 
 #include	<ev.h>
 
@@ -41,6 +42,28 @@ int	 do_streaming = 1;
 
 #define		ignore_errno(e) ((e) == EAGAIN || (e) == EINPROGRESS || (e) == EWOULDBLOCK)
 
+typedef struct thread {
+	pthread_t		 th_id;
+	struct ev_loop		*th_loop;
+	pthread_mutex_t		 th_mtx;
+	struct ev_prepare	 th_deadlist_ev;
+	struct client		*th_deadlist;
+
+	int			*th_accept;
+	int			 th_naccept;
+	int			 th_acceptsize;
+	ev_async		 th_wakeup;
+} thread_t;
+
+thread_t *threads;
+int	  nthreads = 1;
+int	  next_thread;
+
+void	 thread_wakeup(struct ev_loop *, ev_async *, int);
+void	*thread_run(void *);
+void	 thread_accept(thread_t *);
+void	 thread_deadlist(struct ev_loop *, ev_prepare *w, int revents);
+
 typedef enum client_state {
 	CL_NORMAL,
 	CL_TAKETHIS,
@@ -50,6 +73,7 @@ typedef enum client_state {
 #define	CL_DEAD		0x1
 
 typedef struct client {
+	thread_t	*cl_thread;
 	int		 cl_fd;
 	ev_io		 cl_readable;
 	ev_io		 cl_writable;
@@ -61,8 +85,6 @@ typedef struct client {
 	struct client	*cl_next;
 } client_t;
 
-client_t	*deadlist;
-
 void	client_read(struct ev_loop *, ev_io *, int);
 void	client_write(struct ev_loop *, ev_io *, int);
 void	client_flush(client_t *);
@@ -71,9 +93,6 @@ void	client_send(client_t *, char const *);
 void	client_printf(client_t *, char const *, ...);
 void	client_vprintf(client_t *, char const *, va_list);
 
-struct ev_prepare	housekeeping_ev;
-void	do_housekeeping(struct ev_loop *, ev_prepare *w, int revents);
-
 typedef struct listener {
 	int	ln_fd;
 	ev_io	ln_readable;
@@ -81,7 +100,7 @@ typedef struct listener {
 
 void	listener_accept(struct ev_loop *, ev_io *, int);
 
-struct ev_loop	*loop;
+struct ev_loop	*main_loop;
 ev_timer	 stats_timer;
 time_t		 start_time;
 
@@ -95,7 +114,7 @@ usage(p)
 	char const	*p;
 {
 	fprintf(stderr,
-"usage: %s [-VDhIS] [-l <host>] [-p <port>]\n"
+"usage: %s [-VDhIS] [-t <threads>] [-l <host>] [-p <port>]\n"
 "\n"
 "    -V                   print version and exit\n"
 "    -h                   print this text\n"
@@ -104,6 +123,7 @@ usage(p)
 "    -S                   support streaming only (not IHAVE)\n"
 "    -l <host>            address to listen on (default: localhost)\n"
 "    -p <port>            port to listen on (default: 119)\n"
+"    -t <threads>         number of processing threads (default: 1)\n"
 , p);
 }
 
@@ -115,7 +135,7 @@ int	 c, i;
 char	*progname = av[0];
 struct addrinfo	*res, *r, hints;
 
-	while ((c = getopt(ac, av, "VDSIhl:p:")) != -1) {
+	while ((c = getopt(ac, av, "VDSIhl:p:t:")) != -1) {
 		switch (c) {
 		case 'V':
 			printf("nntpsink %s\n", PACKAGE_VERSION);
@@ -141,6 +161,14 @@ struct addrinfo	*res, *r, hints;
 		case 'p':
 			free(port);
 			port = strdup(optarg);
+			break;
+
+		case 't':
+			if ((nthreads = atoi(optarg)) <= 0) {
+				fprintf(stderr, "%s: threads must be greater than zero\n",
+					av[0]);
+				return 1;
+			}
 			break;
 
 		case 'h':
@@ -171,7 +199,7 @@ struct addrinfo	*res, *r, hints;
 		return 1;
 	}
 
-	loop = ev_loop_new(ev_supported_backends());
+	main_loop = ev_loop_new(ev_supported_backends());
 
 	bzero(&hints, sizeof(hints));
 	hints.ai_family = PF_UNSPEC;
@@ -237,21 +265,93 @@ struct addrinfo	*res, *r, hints;
 		ev_io_init(&lsn->ln_readable, listener_accept, lsn->ln_fd, EV_READ);
 		lsn->ln_readable.data = lsn;
 
-		ev_io_start(loop, &lsn->ln_readable);
+		ev_io_start(main_loop, &lsn->ln_readable);
 	}
 		
 	freeaddrinfo(res);
 
 	ev_timer_init(&stats_timer, do_stats, 1., 1.);
-	ev_timer_start(loop, &stats_timer);
+	ev_timer_start(main_loop, &stats_timer);
 
-        ev_prepare_init(&housekeeping_ev, do_housekeeping);
-	ev_prepare_start(loop, &housekeeping_ev);
+	threads = xcalloc(nthreads, sizeof(thread_t));
+	for (i = 0; i < nthreads; i++) {
+	thread_t	*th = &threads[i];
+
+		th->th_loop = ev_loop_new(ev_supported_backends());
+
+		ev_async_init(&th->th_wakeup, thread_wakeup);
+		th->th_wakeup.data = th;
+
+		ev_prepare_init(&th->th_deadlist_ev, thread_deadlist);
+		th->th_deadlist_ev.data = th;
+
+		pthread_mutex_init(&th->th_mtx, NULL);
+		pthread_create(&th->th_id, NULL, thread_run, th);
+	}
 
 	time(&start_time);
-	ev_run(loop, 0);
+	ev_run(main_loop, 0);
 
 	return 0;
+}
+
+void *
+thread_run(p)
+	void	*p;
+{
+thread_t	*th = p;
+	ev_async_start(th->th_loop, &th->th_wakeup);
+	ev_prepare_start(th->th_loop, &th->th_deadlist_ev);
+	ev_run(th->th_loop, 0);
+	return NULL;
+}
+
+void
+thread_wakeup(loop, w, revents)
+	struct ev_loop	*loop;
+	ev_async	*w;
+{
+thread_t	*th = w->data;
+	thread_accept(th);
+}
+
+void
+thread_accept(th)
+	thread_t	*th;
+{
+int	i;
+
+	pthread_mutex_lock(&th->th_mtx);
+	
+	for (i = 0; i < th->th_naccept; i++) {
+	client_t	*client = xcalloc(1, sizeof(*client));
+	int		 one = 1;
+	int		 fd = th->th_accept[i];
+
+		client->cl_fd = fd;
+		if (setsockopt(client->cl_fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) == -1) {
+			close(fd);
+			free(client);
+			continue;
+		}
+
+		client->cl_thread = th;
+		client->cl_rdbuf = cq_new();
+		client->cl_wrbuf = cq_new();
+
+		ev_io_init(&client->cl_readable, client_read, client->cl_fd, EV_READ);
+		client->cl_readable.data = client;
+
+		ev_io_init(&client->cl_writable, client_write, client->cl_fd, EV_WRITE);
+		client->cl_writable.data = client;
+
+		ev_io_start(th->th_loop, &client->cl_readable);
+		client_printf(client, "200 nntpsink ready.\r\n");
+		client_flush(client);
+	}
+
+	th->th_naccept = 0;
+	pthread_mutex_unlock(&th->th_mtx);
 }
 
 void
@@ -265,28 +365,23 @@ struct sockaddr_storage	 addr;
 socklen_t		 addrlen;
 
 	while ((fd = accept(lsn->ln_fd, (struct sockaddr *) &addr, &addrlen)) >= 0) {
-	client_t	*client = xcalloc(1, sizeof(*client));
-	int		 one = 1;
+	thread_t	*th = &threads[next_thread];
 
-		client->cl_fd = fd;
-		if (setsockopt(client->cl_fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) == -1) {
-			close(fd);
-			free(client);
-			return;
+		pthread_mutex_lock(&th->th_mtx);
+		if (++th->th_naccept > th->th_acceptsize) {
+			th->th_accept = realloc(th->th_accept,
+						sizeof(int) * (th->th_acceptsize * 2));
+			th->th_acceptsize *= 2;
 		}
 
-		client->cl_rdbuf = cq_new();
-		client->cl_wrbuf = cq_new();
+		th->th_accept[th->th_naccept - 1] = fd;
+		ev_async_send(th->th_loop, &th->th_wakeup);
+		pthread_mutex_unlock(&th->th_mtx);
 
-		ev_io_init(&client->cl_readable, client_read, client->cl_fd, EV_READ);
-		client->cl_readable.data = client;
-
-		ev_io_init(&client->cl_writable, client_write, client->cl_fd, EV_WRITE);
-		client->cl_writable.data = client;
-
-		ev_io_start(loop, &client->cl_readable);
-		client_printf(client, "200 nntpsink ready.\r\n");
-		client_flush(client);
+		if (next_thread == (nthreads - 1))
+			next_thread = 0;
+		else
+			++next_thread;
 	}
 
 	if (!ignore_errno(errno)) {
@@ -320,6 +415,9 @@ void
 client_flush(cl)
 	client_t	*cl;
 {
+thread_t	*th = cl->cl_thread;
+struct ev_loop	*loop = th->th_loop;
+
 	if (cl->cl_flags & CL_DEAD)
 		return;
 
@@ -342,11 +440,15 @@ void
 client_close(cl)
 	client_t	*cl;
 {
+thread_t	*th = cl->cl_thread;
+struct ev_loop	*loop = th->th_loop;
+
 	ev_io_stop(loop, &cl->cl_writable);
 	ev_io_stop(loop, &cl->cl_readable);
 	cl->cl_flags |= CL_DEAD;
-	cl->cl_next = deadlist;
-	deadlist = cl;
+
+	cl->cl_next = th->th_deadlist;
+	th->th_deadlist = cl;
 }
 
 void
@@ -537,16 +639,18 @@ time_t		upt = time(NULL) - start_time;
 }
 
 void
-do_housekeeping(loop, w, revents)
+thread_deadlist(loop, w, revents)
 	struct ev_loop	*loop;
 	ev_prepare	*w;
 {
 client_t	*cl, *next;
-	cl = deadlist;
+thread_t	*th = w->data;
+
+	cl = th->th_deadlist;
 	while (cl) {
 		next = cl->cl_next;
 		client_destroy(cl);
 		cl = next;
 	}
-	deadlist = NULL;
+	th->th_deadlist = NULL;
 }
