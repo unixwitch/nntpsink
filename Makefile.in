@@ -26,7 +26,7 @@ LIBS		= @LIBS@
 YACC		= @YACC@
 LEX		= @LEX@
 
-SRCS		= nntpsink.c charq.c
+SRCS		= nntpsink.c charq.c strlcpy.c
 
 EXTRA_SRCS	= @EXTRA_SRCS@
 HDRS		= charq.h
