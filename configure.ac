@@ -45,6 +45,7 @@ fi
 AC_CHECK_LIB([ev], [ev_run], [], [AC_MSG_ERROR([cannot find libev])])
 AC_CHECK_HEADER([ev.h], [], [AC_MSG_ERROR([cannot find ev.h])])
 
+AC_CHECK_LIB([pthread], [pthread_create], [LIBS="$LIBS -lpthread"])
 AC_CHECK_HEADERS([inttypes.h stdint.h])
 
 AC_CHECK_FUNCS([strndup strlcpy strlcat setproctitle arc4random fdatasync])
