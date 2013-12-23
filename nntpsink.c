@@ -118,7 +118,7 @@ struct addrinfo	*res, *r, hints;
 	while ((c = getopt(ac, av, "VDSIhl:p:")) != -1) {
 		switch (c) {
 		case 'V':
-			printf("nntpgen %s\n", PACKAGE_VERSION);
+			printf("nntpsink %s\n", PACKAGE_VERSION);
 			return 0;
 
 		case 'D':
