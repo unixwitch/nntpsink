@@ -1,6 +1,6 @@
 dnl nntpsink: dummy NNTP server
 dnl 
-dnl Copyright (c) 2011-2013 River Tarnell.
+dnl Copyright (c) 2011-2014 Felicity Tarnell.
 dnl
 dnl Permission is granted to anyone to use this software for any purpose,
 dnl including commercial applications, and to alter it and redistribute it
@@ -8,7 +8,7 @@ dnl freely. This software is provided 'as-is', without any express or implied
 dnl warranty.
 
 AC_PREREQ([2.68])
-AC_INIT([nntpgen], [1.0-DEV], [river@loreley.flyingparchment.org.uk])
+AC_INIT([nntpgen], [T.1.0], [felicity@loreley.flyingparchment.org.uk])
 AC_CONFIG_SRCDIR([nntpsink.c])
 AC_CONFIG_HEADERS([setup.h])
 

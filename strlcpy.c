@@ -1,6 +1,5 @@
 /*	$NetBSD: strlcpy.c,v 1.3 2007/06/04 18:19:27 christos Exp $	*/
 /*	$OpenBSD: strlcpy.c,v 1.7 2003/04/12 21:56:39 millert Exp $	*/
-/*	$Header: /cvsroot/nts/strlcpy.c,v 1.2 2012/01/04 06:19:24 river Exp $	*/
 
 /*
  * Copyright (c) 1998 Todd C. Miller <Todd.Miller@courtesan.com>
